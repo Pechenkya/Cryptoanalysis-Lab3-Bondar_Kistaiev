@@ -4,8 +4,8 @@
 #![allow(non_snake_case)]
 
 // Allocation optimization
-// #[global_allocator]
-// static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::iter::{Product, Sum};
 // Includes
@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 use std::cmp::Ordering;
+use std::thread;
 
 use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign};
 use num_traits::{ConstZero, Zero};
@@ -46,6 +47,7 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
     let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
     let l: BigUint = ToBigUint::to_biguint(&L_CONST).ok_or("Stupid l is not translatable!")?;
 
+    println!("Getting values from: '{MitM_test_path}'");
     let mut test_values = read_variant(MitM_test_path)?;
     let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
     let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
@@ -56,11 +58,15 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
 
     let timer = Instant::now();
 
-    let mut X = Vec::<(BigUint, BigUint)>::new();
-    for a in 1..2u32.pow(L_CONST / 2) + 1 {
+    
+    println!("> MitM: Started pushing!");
+    let size = 1usize << (L_CONST / 2);
+    let mut X = Vec::<(BigUint, BigUint)>::with_capacity(size);
+    for a in 1..=size {
         let num = ToBigUint::to_biguint(&a).unwrap();
         X.push((num.modpow(&e, &N), num));
     }
+    println!("> MitM: Pushing finished!");
 
     for (S_e, S) in &X {     
         let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
@@ -138,6 +144,7 @@ fn CRT_solve(Ns: &Vec<BigInt>, Cs: &Vec<BigInt>) -> BigInt {
 }
 
 fn Small_Exponent_attack_test() -> Result<Duration, Box<dyn std::error::Error>> {
+    println!("Getting values from: '{SE_test_path}'");
     let mut test_values = read_variant(SE_test_path)?;
     let mut Ns = Vec::<BigInt>::new();
     let mut Cs = Vec::<BigInt>::new();
@@ -179,11 +186,12 @@ fn Small_Exponent_attack_test() -> Result<Duration, Box<dyn std::error::Error>> 
 
 fn main() {
     let MitM_time = Meet_in_the_Midle_attack_test().unwrap();
-    println!("'Meet in the middle' execution time: {} ms", MitM_time.as_millis());
+    println!("'Meet in the middle' execution time: {} µs", MitM_time.as_micros());
 
-    println!("\n--------------------------------------------\n");
+    // println!("\n--------------------------------------------\n");
 
-    let SE_time = Small_Exponent_attack_test().unwrap();
-    println!("'Small exponent' execution time: {} ms", SE_time.as_millis());
+    // let SE_time = Small_Exponent_attack_test().unwrap();
+    // println!("'Small exponent' execution time: {} µs", SE_time.as_micros());
 
+    // println!("{}", 1u128 << (L_CONST / 2));
 }

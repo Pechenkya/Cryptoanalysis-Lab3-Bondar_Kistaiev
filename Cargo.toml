@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mimalloc = { version = "0.1.43", default-features = false }
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 
