@@ -9,7 +9,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::iter::{Product, Sum};
 // Includes
-use std::{collections, fs};
+use std::{collections::{BTreeMap}, fs};
 use std::fmt::Debug;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -19,11 +19,17 @@ use std::thread;
 
 use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign};
 use num_traits::{ConstZero, Zero};
+use rayon;
+use dashmap::DashMap;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 
 // Testing settings 
-const MitM_test_path: &'static str = "data/MitM_vars/MitM_RSA_2048_20_regular/04.txt";
+const MitM_test_path: &'static str = "data/MitM_vars/MitM_RSA_256_56_for_dummy_dummies/04.txt";
 const E_CONST: u32 = 65537;
-const L_CONST: u32 = 20;
+const L_CONST: u32 = 56;
+// Concurrency vars
+const BLOCK_POWER: u32 = 20;
+const BLOCK_SIZE: usize = 1usize << BLOCK_POWER; // 1 MB * sizeof(BigUint) ~ 2GB per table block for max RSA
 
 const SE_test_path: &'static str = "data/SE_vars/SE_RSA_1024_5_hard/04.txt";
 const SE_COUNT: u32 = 5;
@@ -58,24 +64,100 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
 
     let timer = Instant::now();
 
-    
-    println!("> MitM: Started pushing!");
     let size = 1usize << (L_CONST / 2);
-    let mut X = Vec::<(BigUint, BigUint)>::with_capacity(size);
-    for a in 1..=size {
+
+    let mut X = HashMap::<BigUint, BigUint>::new();
+    println!("> MitM: Started pushing at {}!", timer.elapsed().as_micros());
+    let X = (1..=size).into_par_iter().map(|a| {
         let num = ToBigUint::to_biguint(&a).unwrap();
-        X.push((num.modpow(&e, &N), num));
-    }
-    println!("> MitM: Pushing finished!");
+        (num.modpow(&e, &N), num)
+    }).collect::<HashMap<BigUint, BigUint>>();
+    println!("> MitM: Pushing finished at {}!", timer.elapsed().as_micros());
 
     for (S_e, S) in &X {     
         let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-        for (T_e, T) in &X {
-            if &C_S == T_e {
-                let M = S * T;
-                println!("MitM message: {M}");
+        if X.contains_key(&C_S) {
+            let M = S * X.get(&C_S).unwrap();
+            println!("MitM message: {M}");
 
+            return Ok(timer.elapsed());
+        }
+    }
+
+    println!("None message found for MitM! Shieeet...");
+
+    Ok(timer.elapsed())
+}
+
+fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn std::error::Error>> {
+    let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
+    let l: BigUint = ToBigUint::to_biguint(&L_CONST).ok_or("Stupid l is not translatable!")?;
+
+    println!("Getting values from: '{MitM_test_path}'");
+    let mut test_values = read_variant(MitM_test_path)?;
+    let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
+    let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
+
+    println!("Meet in the Midle attack started for l = {L_CONST}");
+    println!("N: {N}");
+    println!("C: {C}");
+
+    let timer = Instant::now();
+
+    let blocks = 1usize << ((L_CONST / 2) - BLOCK_POWER);
+    // let blocks = 1;
+    for bn_t in 0..blocks {
+        // Symmetrical variant
+        let shift_t_start = 1 + bn_t*BLOCK_SIZE;
+        let shift_t_end = (bn_t + 1)*BLOCK_SIZE;
+        let T_block = (shift_t_start..=shift_t_end).into_par_iter().map(|a| {
+            let num = ToBigUint::to_biguint(&a).unwrap();
+            (num.modpow(&e, &N), num)
+        }).collect::<HashMap<BigUint, BigUint>>();
+
+        // Self-compare
+        println!("bn_t = {bn_t}, bn_s = {bn_t}");
+        for (S_e, S) in &T_block {     
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            if T_block.contains_key(&C_S) {
+                let M = S * T_block.get(&C_S).unwrap();
+                println!("MitM message: {M}");
+    
                 return Ok(timer.elapsed());
+            }
+        }
+
+        // Asymmetrical variant
+        for bn_s in bn_t + 1..blocks
+        {
+            println!("bn_t = {bn_t}, bn_s = {bn_s}");
+
+            let shift_s_start = 1 + bn_s*BLOCK_SIZE;
+            let shift_s_end = (bn_s + 1)*BLOCK_SIZE;
+            let S_block = (shift_s_start..=shift_s_end).into_par_iter().map(|a| {
+                let num = ToBigUint::to_biguint(&a).unwrap();
+                (num.modpow(&e, &N), num)
+            }).collect::<HashMap<BigUint, BigUint>>();
+            
+            // Compare to other
+            for (S_e, S) in &S_block {     
+                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+                if T_block.contains_key(&C_S) {
+                    let M = S * T_block.get(&C_S).unwrap();
+                    println!("MitM message: {M}");
+        
+                    return Ok(timer.elapsed());
+                }
+            }
+
+            for (T_e, T) in &T_block {     
+                let C_T = (&C * T_e.modinv(&N).unwrap()) % &N;
+                if S_block.contains_key(&C_T) {
+                    let M = T * S_block.get(&C_T).unwrap();
+                    println!("MitM message: {M}");
+        
+                    return Ok(timer.elapsed());
+                }
             }
         }
     }
@@ -185,8 +267,11 @@ fn Small_Exponent_attack_test() -> Result<Duration, Box<dyn std::error::Error>> 
 
 
 fn main() {
-    let MitM_time = Meet_in_the_Midle_attack_test().unwrap();
-    println!("'Meet in the middle' execution time: {} µs", MitM_time.as_micros());
+    // let MitM_time = Meet_in_the_Midle_attack_test().unwrap();
+    // println!("'Meet in the middle' execution time: {} µs", MitM_time.as_micros());
+
+    let MitM_time = Meet_in_the_Midle_attack_space_compromise_test().unwrap();
+    println!("'Meet in the middle with space compromise' execution time: {} µs", MitM_time.as_micros());
 
     // println!("\n--------------------------------------------\n");
 

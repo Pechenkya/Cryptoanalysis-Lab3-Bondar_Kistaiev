@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+dashmap = "6.1.0"
 mimalloc = { version = "0.1.43", default-features = false }
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
+rayon = "1.10.0"
 
 [profile.release]
 opt-level = 3
