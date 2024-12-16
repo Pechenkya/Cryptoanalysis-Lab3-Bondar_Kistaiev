@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "crypto-bigint",
  "num-bigint",
+ "num-traits",
 ]
 
 [[package]]

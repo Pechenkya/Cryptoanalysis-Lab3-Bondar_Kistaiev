@@ -3,14 +3,17 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
-use std::cmp::Ordering;
+use std::iter::{Product, Sum};
 // Includes
 use std::{collections, fs};
 use std::fmt::Debug;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
+use std::cmp::Ordering;
 
-use num_bigint::{BigUint, ToBigUint};
+use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign};
+use num_traits::{ConstZero, Zero};
 
 // Testing settings 
 const MitM_test_path: &'static str = "data/MitM_vars/MitM_RSA_2048_20_regular/04.txt";
@@ -34,7 +37,7 @@ fn read_variant(path: &str) -> Result<HashMap::<String, BigUint>, Box<dyn std::e
 }
 
 // Meet in the middle attack
-fn Meet_in_the_Midle_attack_test() -> Result<(), Box<dyn std::error::Error>> {
+fn Meet_in_the_Midle_attack_test() -> Result<(Duration), Box<dyn std::error::Error>> {
     let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
     let l: BigUint = ToBigUint::to_biguint(&L_CONST).ok_or("Stupid l is not translatable!")?;
 
@@ -42,8 +45,11 @@ fn Meet_in_the_Midle_attack_test() -> Result<(), Box<dyn std::error::Error>> {
     let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
     let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
 
+    println!("Meet in the Midle attack started for l = {L_CONST}");
     println!("N: {N}");
     println!("C: {C}");
+
+    let timer = Instant::now();
 
     let mut X = Vec::<(BigUint, BigUint)>::new();
     for a in 1..2u32.pow(L_CONST / 2) + 1 {
@@ -52,23 +58,81 @@ fn Meet_in_the_Midle_attack_test() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for (S_e, S) in &X {     
-        let C_S = (C.clone() * S_e.modinv(&N).unwrap()) % &N;
+        let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
         for (T_e, T) in &X {
-            if C_S.cmp(T_e) == Ordering::Equal {
+            if &C_S == T_e {
                 let M = S * T;
-                print!("Message: {M:#?}");
+                print!("Message: {M}");
 
-                return Ok(());
+                return Ok((timer.elapsed()));
             }
         }
     }
 
     println!("None found! Shieeet...");
 
-    Ok(())
+    Ok((timer.elapsed()))
 }
 
+fn EE_algoritm_Bezout(a: &BigInt, b: &BigInt) -> (BigInt, BigInt)
+{
+    let (mut m, mut n) = (a.clone(), b.clone());
+    let (mut old_v, mut v) = (ToBigInt::to_bigint(&1).unwrap(), ToBigInt::to_bigint(&0).unwrap());
+    let (mut old_u, mut u) = (ToBigInt::to_bigint(&0).unwrap(), ToBigInt::to_bigint(&1).unwrap());
+
+    while !n.is_zero() {
+        let q = &m / &n;
+        (m, n) = (n.clone(), &m - (&q * &n));
+        (old_v, v) = (v.clone(), (&v - &q * &old_v));
+        (old_u, u) = (u.clone(), &u - (&q * &old_u));
+    }
+
+    return (old_u, old_v);
+}
+
+fn CRT_solve(Ns: &Vec<BigInt>, Cs: &Vec<BigInt>) -> BigInt {
+    let PROD_N = BigInt::product(Ns.iter());
+    
+    let mut Ni = Vec::<BigInt>::new();
+    let mut Mi = Vec::<BigInt>::new();
+    for ni in Ns {
+        Ni.push(&PROD_N / ni);
+        Mi.push(EE_algoritm_Bezout(Ni.last().unwrap(), ni).0);
+    }
+
+    let mut res = BigInt::ZERO;
+    for i in 0..Cs.len() {
+        res = (&res + (&Cs[i] * &Ni[i] * &Mi[i])) % &PROD_N;
+    }
+
+    return res;
+}
+
+fn Small_Exponent_attack_test() -> Result<(Duration), Box<dyn std::error::Error>> {
+    let mut test_values = read_variant(SE_test_path)?;
+
+    let mut Ns = Vec::<BigInt>::new();
+    let mut Cs = Vec::<BigInt>::new();
+    for i in 1..=SE_COUNT{
+        Ns.push(BigInt::from_biguint(Sign::Plus, test_values.remove(&format!("N{i}")).ok_or("N error for SE!")?));
+        Cs.push(BigInt::from_biguint(Sign::Plus, test_values.remove(&format!("C{i}")).ok_or("N error for SE!")?));
+    }
+
+    let C = CRT_solve(&Ns, &Cs);
+
+    for i in 2..=SE_COUNT {
+        
+    }
+
+    let timer = Instant::now();
+    Ok((timer.elapsed()))
+}
 
 fn main() {
-    Meet_in_the_Midle_attack_test();
+    // Meet_in_the_Midle_attack_test();
+    // Small_Exponent_attack_test();
+
+    let a = ToBigInt::to_bigint(&100).unwrap();
+    let b = ToBigInt::to_bigint(&99).unwrap();
+    println!("{:?}", EE_algoritm_Bezout(&a, &b));
 }
