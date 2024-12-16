@@ -19,17 +19,20 @@ use std::thread;
 
 use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign};
 use num_traits::{ConstZero, Zero};
-use rayon;
 use dashmap::DashMap;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 
 // Testing settings 
-const MitM_test_path: &'static str = "data/MitM_vars/MitM_RSA_256_56_for_dummy_dummies/04.txt";
+const MitM_test_path: &'static str = "data/MitM_vars/bonus_MitM_RSA_2048_56_hard/04.txt";
 const E_CONST: u32 = 65537;
 const L_CONST: u32 = 56;
 // Concurrency vars
-const BLOCK_POWER: u32 = 20;
+const BLOCK_POWER: u32 = 24;
 const BLOCK_SIZE: usize = 1usize << BLOCK_POWER; // 1 MB * sizeof(BigUint) ~ 2GB per table block for max RSA
+
+// MULTI-PC PARAM
+const USER_BLOCK_SHIFT: usize = 0; // PetaB - 0 (16-13: 58 + 4); Matvii - 4 (12-9: 42 + 4); Goose - 8 (8-1: 28 + 8);
+
 
 const SE_test_path: &'static str = "data/SE_vars/SE_RSA_1024_5_hard/04.txt";
 const SE_COUNT: u32 = 5;
@@ -74,16 +77,20 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
     }).collect::<HashMap<BigUint, BigUint>>();
     println!("> MitM: Pushing finished at {}!", timer.elapsed().as_micros());
 
-    for (S_e, S) in &X {     
+    let S_opt = X.par_iter().into_par_iter().find_any(|item| {
+        let C_S = (&C * item.0.modinv(&N).unwrap()) % &N;
+        X.contains_key(&C_S)
+    });
+
+    if S_opt.is_some() {
+        let (S_e, S) = S_opt.unwrap();
         let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-        if X.contains_key(&C_S) {
-            let M = S * X.get(&C_S).unwrap();
-            println!("MitM message: {M}");
+        let M = S * X.get(&C_S).unwrap();
 
-            return Ok(timer.elapsed());
-        }
+        println!("MitM message: {M}");
+        return Ok(timer.elapsed());
     }
-
+    
     println!("None message found for MitM! Shieeet...");
 
     Ok(timer.elapsed())
@@ -103,62 +110,114 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
     println!("C: {C}");
 
     let timer = Instant::now();
+    let mut check: Option<(BigUint, BigUint)>;
 
     let blocks = 1usize << ((L_CONST / 2) - BLOCK_POWER);
-    // let blocks = 1;
-    for bn_t in 0..blocks {
+
+    for bn_t in USER_BLOCK_SHIFT..blocks {
+        println!("Start: bn_t = {bn_t}, bn_s = {bn_t} : {}", timer.elapsed().as_micros());
         // Symmetrical variant
         let shift_t_start = 1 + bn_t*BLOCK_SIZE;
         let shift_t_end = (bn_t + 1)*BLOCK_SIZE;
-        let T_block = (shift_t_start..=shift_t_end).into_par_iter().map(|a| {
+        let T_block = DashMap::<BigUint, BigUint>::with_capacity(BLOCK_SIZE);
+        (shift_t_start..=shift_t_end).into_par_iter().for_each(|a| {
             let num = ToBigUint::to_biguint(&a).unwrap();
-            (num.modpow(&e, &N), num)
-        }).collect::<HashMap<BigUint, BigUint>>();
-
-        // Self-compare
-        println!("bn_t = {bn_t}, bn_s = {bn_t}");
-        for (S_e, S) in &T_block {     
-            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-            if T_block.contains_key(&C_S) {
-                let M = S * T_block.get(&C_S).unwrap();
-                println!("MitM message: {M}");
+            T_block.insert(num.modpow(&e, &N), num);
+        });
+        
+        println!("Generated: bn_t = {bn_t}, bn_s = {bn_t} : {}", timer.elapsed().as_micros());
+        // for (S_e, S) in T_block.clone() {     
+        //     let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+        //     if T_block.contains_key(&C_S) {
+        //         let M = S * &*T_block.get(&C_S).unwrap();
+        //         println!("MitM message: {M}");
     
-                return Ok(timer.elapsed());
-            }
+        //         return Ok(timer.elapsed());
+        //     }
+        // }
+
+        let T_e_values: Vec<_> = T_block.iter().map(|entry| entry.key().clone()).collect();
+        let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            T_block.contains_key(&C_S)
+        });
+
+        if S_e_opt.is_some() {
+            let S_e = S_e_opt.unwrap();
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            let M = &*T_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
+
+            println!("MitM message: {M}");
+            return Ok(timer.elapsed());
         }
+
+        println!("End: bn_t = {bn_t}, bn_s = {bn_t} : {}", timer.elapsed().as_micros());
 
         // Asymmetrical variant
         for bn_s in bn_t + 1..blocks
         {
-            println!("bn_t = {bn_t}, bn_s = {bn_s}");
+            println!("Start: bn_t = {bn_t}, bn_s = {bn_s} : {}", timer.elapsed().as_micros());
 
             let shift_s_start = 1 + bn_s*BLOCK_SIZE;
             let shift_s_end = (bn_s + 1)*BLOCK_SIZE;
-            let S_block = (shift_s_start..=shift_s_end).into_par_iter().map(|a| {
+            let S_block = DashMap::<BigUint, BigUint>::with_capacity(BLOCK_SIZE);
+            (shift_s_start..=shift_s_end).into_par_iter().for_each(|a| {
                 let num = ToBigUint::to_biguint(&a).unwrap();
-                (num.modpow(&e, &N), num)
-            }).collect::<HashMap<BigUint, BigUint>>();
+                S_block.insert(num.modpow(&e, &N), num);
+            });
             
+            let S_e_values: Vec<_> = S_block.iter().map(|entry| entry.key().clone()).collect();
+
             // Compare to other
-            for (S_e, S) in &S_block {     
-                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-                if T_block.contains_key(&C_S) {
-                    let M = S * T_block.get(&C_S).unwrap();
-                    println!("MitM message: {M}");
+            // for (S_e, S) in S_block.clone().into_iter() {     
+            //     let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            //     if T_block.contains_key(&C_S) {
+            //         let M = S * &*T_block.get(&C_S).unwrap();
+            //         println!("MitM message: {M}");
         
-                    return Ok(timer.elapsed());
-                }
+            //         return Ok(timer.elapsed());
+            //     }
+            // }
+            let S_e_opt = S_e_values.par_iter().find_any(|S_e| {
+                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+                T_block.contains_key(&C_S)
+            });
+    
+            if S_e_opt.is_some() {
+                let S_e = S_e_opt.unwrap();
+                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+                let M = &*S_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
+    
+                println!("MitM message: {M}");
+                return Ok(timer.elapsed());
             }
 
-            for (T_e, T) in &T_block {     
-                let C_T = (&C * T_e.modinv(&N).unwrap()) % &N;
-                if S_block.contains_key(&C_T) {
-                    let M = T * S_block.get(&C_T).unwrap();
-                    println!("MitM message: {M}");
+
+
+            // for (T_e, T) in T_block.clone().into_iter() {     
+            //     let C_T = (&C * T_e.modinv(&N).unwrap()) % &N;
+            //     if S_block.contains_key(&C_T) {
+            //         let M = T * &*S_block.get(&C_T).unwrap();
+            //         println!("MitM message: {M}");
         
-                    return Ok(timer.elapsed());
-                }
+            //         return Ok(timer.elapsed());
+            //     }
+            // }
+            let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
+                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+                S_block.contains_key(&C_S)
+            });
+    
+            if S_e_opt.is_some() {
+                let S_e = S_e_opt.unwrap();
+                let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+                let M = &*T_block.get(&S_e).unwrap() * &*S_block.get(&C_S).unwrap();
+    
+                println!("MitM message: {M}");
+                return Ok(timer.elapsed());
             }
+
+            println!("End: bn_t = {bn_t}, bn_s = {bn_s} : {}", timer.elapsed().as_micros());
         }
     }
 
