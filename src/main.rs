@@ -1,5 +1,4 @@
 #![allow(unused)]
-#![allow(unused_variables)]
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
@@ -7,20 +6,18 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::iter::{Product, Sum};
+use std::iter::Product;
 // Includes
-use std::{collections::{BTreeMap}, fs};
-use std::fmt::Debug;
+use std::fs;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use std::cmp::Ordering;
-use std::thread;
+use rand::Rng;
 
-use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign};
-use num_traits::{ConstZero, Zero};
+use num_bigint::{BigUint, ToBigUint, BigInt, ToBigInt, Sign, RandomBits};
+use num_traits::Zero;
 use dashmap::DashMap;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 // Testing settings 
 const MitM_test_path: &'static str = "data/MitM_vars/bonus_MitM_RSA_2048_56_hard/04.txt";
@@ -54,7 +51,6 @@ fn read_variant(path: &str) -> Result<HashMap::<String, BigUint>, Box<dyn std::e
 // --------------------------- Meet in the middle attack ------------------------
 fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error>> {
     let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
-    let l: BigUint = ToBigUint::to_biguint(&L_CONST).ok_or("Stupid l is not translatable!")?;
 
     println!("Getting values from: '{MitM_test_path}'");
     let mut test_values = read_variant(MitM_test_path)?;
@@ -69,7 +65,6 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
 
     let size = 1usize << (L_CONST / 2);
 
-    let mut X = HashMap::<BigUint, BigUint>::new();
     println!("> MitM: Started pushing at {}!", timer.elapsed().as_micros());
     let X = (1..=size).into_par_iter().map(|a| {
         let num = ToBigUint::to_biguint(&a).unwrap();
@@ -88,6 +83,8 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
         let M = S * X.get(&C_S).unwrap();
 
         println!("MitM message: {M}");
+        fs::write("result.txt", format!("MitM found message: {M}\nT: {}\nS: {S}", X.get(&C_S).unwrap())).expect("Unable to write file");
+
         return Ok(timer.elapsed());
     }
     
@@ -98,20 +95,17 @@ fn Meet_in_the_Midle_attack_test() -> Result<Duration, Box<dyn std::error::Error
 
 fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn std::error::Error>> {
     let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
-    let l: BigUint = ToBigUint::to_biguint(&L_CONST).ok_or("Stupid l is not translatable!")?;
 
     println!("Getting values from: '{MitM_test_path}'");
     let mut test_values = read_variant(MitM_test_path)?;
     let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
     let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
 
-    println!("Meet in the Midle attack started for l = {L_CONST}");
+    println!("Meet in the Midle attack (blocks) started for l = {L_CONST}");
     println!("N: {N}");
     println!("C: {C}");
 
     let timer = Instant::now();
-    let mut check: Option<(BigUint, BigUint)>;
-
     let blocks = 1usize << ((L_CONST / 2) - BLOCK_POWER);
 
     for bn_t in USER_BLOCK_SHIFT..blocks {
@@ -126,15 +120,6 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
         });
         
         println!("Generated: bn_t = {bn_t}, bn_s = {bn_t} : {}", timer.elapsed().as_micros());
-        // for (S_e, S) in T_block.clone() {     
-        //     let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-        //     if T_block.contains_key(&C_S) {
-        //         let M = S * &*T_block.get(&C_S).unwrap();
-        //         println!("MitM message: {M}");
-    
-        //         return Ok(timer.elapsed());
-        //     }
-        // }
 
         let T_e_values: Vec<_> = T_block.iter().map(|entry| entry.key().clone()).collect();
         let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
@@ -148,6 +133,8 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
             let M = &*T_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
 
             println!("MitM message: {M}");
+            fs::write("result.txt", format!("MitM found message: {M}")).expect("Unable to write file");
+
             return Ok(timer.elapsed());
         }
 
@@ -169,15 +156,6 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
             let S_e_values: Vec<_> = S_block.iter().map(|entry| entry.key().clone()).collect();
 
             // Compare to other
-            // for (S_e, S) in S_block.clone().into_iter() {     
-            //     let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
-            //     if T_block.contains_key(&C_S) {
-            //         let M = S * &*T_block.get(&C_S).unwrap();
-            //         println!("MitM message: {M}");
-        
-            //         return Ok(timer.elapsed());
-            //     }
-            // }
             let S_e_opt = S_e_values.par_iter().find_any(|S_e| {
                 let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
                 T_block.contains_key(&C_S)
@@ -189,20 +167,11 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
                 let M = &*S_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
     
                 println!("MitM message: {M}");
+                fs::write("result.txt", format!("MitM found message: {M}")).expect("Unable to write file");
+
                 return Ok(timer.elapsed());
             }
 
-
-
-            // for (T_e, T) in T_block.clone().into_iter() {     
-            //     let C_T = (&C * T_e.modinv(&N).unwrap()) % &N;
-            //     if S_block.contains_key(&C_T) {
-            //         let M = T * &*S_block.get(&C_T).unwrap();
-            //         println!("MitM message: {M}");
-        
-            //         return Ok(timer.elapsed());
-            //     }
-            // }
             let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
                 let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
                 S_block.contains_key(&C_S)
@@ -214,6 +183,8 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
                 let M = &*T_block.get(&S_e).unwrap() * &*S_block.get(&C_S).unwrap();
     
                 println!("MitM message: {M}");
+                fs::write("result.txt", format!("MitM found message: {M}")).expect("Unable to write file");
+
                 return Ok(timer.elapsed());
             }
 
@@ -225,12 +196,119 @@ fn Meet_in_the_Midle_attack_space_compromise_test() -> Result<Duration, Box<dyn 
 
     Ok(timer.elapsed())
 }
+
+fn MitM_one_cross_compare(bn_t: usize, bn_s: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
+
+    println!("Getting values from: '{MitM_test_path}'");
+    let mut test_values = read_variant(MitM_test_path)?;
+    let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
+    let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
+
+    println!("Meet in the Midle attack (only two blocks) started for l = {L_CONST}");
+    println!("N: {N}");
+    println!("C: {C}");
+
+    // T Block
+    let shift_t_start = 1 + bn_t*BLOCK_SIZE;
+    let shift_t_end = (bn_t + 1)*BLOCK_SIZE;
+    let T_block = DashMap::<BigUint, BigUint>::with_capacity(BLOCK_SIZE);
+    (shift_t_start..=shift_t_end).into_par_iter().for_each(|a| {
+        let num = ToBigUint::to_biguint(&a).unwrap();
+        T_block.insert(num.modpow(&e, &N), num);
+    });
+    let T_e_values: Vec<_> = T_block.iter().map(|entry| entry.key().clone()).collect();
+
+    if bn_t == bn_s {
+        let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            T_block.contains_key(&C_S)
+        });
+
+        if S_e_opt.is_some() {
+            let S_e = S_e_opt.unwrap();
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            let M = &*T_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
+
+            println!("MitM message: {M}");
+            fs::write("result.txt", format!("MitM found message: {M}\nT: {}\nS: {}", &*T_block.get(&C_S).unwrap(), &*T_block.get(&S_e).unwrap())).expect("Unable to write file");
+        }
+    }
+    else {
+        let mut S_block = DashMap::<BigUint, BigUint>::with_capacity(BLOCK_SIZE);
+        let shift_s_start = 1 + bn_s*BLOCK_SIZE;
+        let shift_s_end = (bn_s + 1)*BLOCK_SIZE;
+        let S_block = DashMap::<BigUint, BigUint>::with_capacity(BLOCK_SIZE);
+        (shift_s_start..=shift_s_end).into_par_iter().for_each(|a| {
+            let num = ToBigUint::to_biguint(&a).unwrap();
+            S_block.insert(num.modpow(&e, &N), num);
+        });
+        let S_e_values: Vec<_> = S_block.iter().map(|entry| entry.key().clone()).collect();
+
+        // T -> S
+        let S_e_opt = S_e_values.par_iter().find_any(|S_e| {
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            T_block.contains_key(&C_S)
+        });
+
+        if S_e_opt.is_some() {
+            let S_e = S_e_opt.unwrap();
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            let M = &*S_block.get(&S_e).unwrap() * &*T_block.get(&C_S).unwrap();
+
+            println!("MitM message: {M}");
+            fs::write("result.txt", format!("MitM found message: {M}\nT: {}\nS: {}", &*T_block.get(&C_S).unwrap(), &*S_block.get(&S_e).unwrap())).expect("Unable to write file");
+
+            return Ok(());
+        }
+
+        // S -> T
+        let S_e_opt = T_e_values.par_iter().find_any(|S_e| {
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            S_block.contains_key(&C_S)
+        });
+
+        if S_e_opt.is_some() {
+            let S_e = S_e_opt.unwrap();
+            let C_S = (&C * S_e.modinv(&N).unwrap()) % &N;
+            let M = &*T_block.get(&S_e).unwrap() * &*S_block.get(&C_S).unwrap();
+
+            println!("MitM message: {M}");
+            fs::write("result.txt", format!("MitM found message: {M}\nT: {}\nS: {}", &*S_block.get(&C_S).unwrap(), &*T_block.get(&S_e).unwrap())).expect("Unable to write file");
+
+            return Ok(());
+        }
+    }
+
+    Ok(())
+}
 // ------------------------------------------------------------------------------
 
 // --------------------------- Bruteforce attack ------------------------
-// fn bruteforce() -> Result<HashMap::<String, BigUint>, Box<dyn std::error::Error>> {
-//     let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
-// }
+fn bruteforce_one_check() -> Result<Duration, Box<dyn std::error::Error>> {
+    let e: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
+    let l: BigUint = ToBigUint::to_biguint(&E_CONST).ok_or("Stupid e is not translatable!")?;
+
+    println!("Getting values from: '{MitM_test_path}'");
+    let mut test_values = read_variant(MitM_test_path)?;
+    let N = test_values.remove("N").ok_or("WTF?? No 'N' in test_values for MitM??")?;
+    let C = test_values.remove("C").ok_or("WTF?? No 'C' in test_values for MitM??")?;
+
+    
+    let mut rng = rand::thread_rng();
+    let ONE: BigUint = ToBigUint::to_biguint(&1).unwrap();
+
+    // Since we know that M < 2^l
+    let mut M: BigUint = rng.sample(RandomBits::new(L_CONST.into()));
+    
+    let timer = Instant::now();
+
+    M = &M + &ONE;
+    let mut C_maybe: BigUint = M.modpow(&e, &N);
+    let cmp: bool = &C_maybe == &C;
+
+    Ok(timer.elapsed())
+}
 // ----------------------------------------------------------------------
 
 
@@ -329,13 +407,16 @@ fn main() {
     // let MitM_time = Meet_in_the_Midle_attack_test().unwrap();
     // println!("'Meet in the middle' execution time: {} µs", MitM_time.as_micros());
 
-    let MitM_time = Meet_in_the_Midle_attack_space_compromise_test().unwrap();
-    println!("'Meet in the middle with space compromise' execution time: {} µs", MitM_time.as_micros());
+    // let MitM_time = Meet_in_the_Midle_attack_space_compromise_test().unwrap();
+    // println!("'Meet in the middle with space compromise' execution time: {} µs", MitM_time.as_micros());
 
     // println!("\n--------------------------------------------\n");
 
     // let SE_time = Small_Exponent_attack_test().unwrap();
     // println!("'Small exponent' execution time: {} µs", SE_time.as_micros());
 
-    // println!("{}", 1u128 << (L_CONST / 2));
+    // MitM_one_cross_compare(12, 13).unwrap();
+
+    let BF_time = bruteforce_one_check().unwrap();
+    println!("One bruteforce (get next M + calc C + compare) time: {} µs", BF_time.as_micros());
 }

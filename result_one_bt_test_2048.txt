@@ -1,0 +1,1 @@
+One bruteforce (get next M + calc C + compare) time: 132 µs

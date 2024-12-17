@@ -1,0 +1,5 @@
+MitM found message: 46149359335459959
+T: 202139571
+S: 228304429
+
+Time of execution: ~42-45h (non-linear execution, blocks separated into three ranges, each ~15h until succes of either of them)

@@ -6,8 +6,9 @@ edition = "2021"
 [dependencies]
 dashmap = "6.1.0"
 mimalloc = { version = "0.1.43", default-features = false }
-num-bigint = "0.4.6"
+num-bigint = { version = "0.4.6", features = ["rand"] }
 num-traits = "0.2.19"
+rand = "0.8.5"
 rayon = "1.10.0"
 
 [profile.release]

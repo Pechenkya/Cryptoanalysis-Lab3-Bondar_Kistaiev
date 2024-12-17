@@ -1,0 +1,5 @@
+MitM found message: 403045
+T: 745
+S: 541
+
+'Meet in the middle' execution time: 49310 µs
